@@ -1,2 +1,2 @@
 # sonar-cleanup
-Small gaoling script for cleaning up sonarqube projects
+Small golang script for cleaning up sonarqube projects
