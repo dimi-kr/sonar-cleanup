@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -17,13 +18,39 @@ type VersionList struct {
 	Date string `json:"d"`
 }
 
+type Page struct {
+	PageIndex int `json:"pageIndex"`
+	PageSize  int `json:"pageSize"`
+	Total     int `json:"total"`
+}
+
+type Response struct {
+	Paging     Page      `json:"paging"`
+	Components []Project `json:"components"`
+}
+
 type Project struct {
-	Id      string                 `json:"id"`
-	Key     string                 `json:"k"`
-	Sc      string                 `json:"sc"`
-	Qu      string                 `json:"qu"`
-	Lv      string                 `json:"lv"`
-	Version map[string]VersionList `json:"v,string"`
+	Organisation string `json:"organisation"`
+	Id           string `json:"id"`
+	Key          string `json:"key"`
+	Name         string `json:"name"`
+	Qualifier    string `json:"qualifier"`
+}
+
+type Component struct {
+	Organization string   `json:"organization"`
+	Id           string   `json:"id"`
+	Key          string   `json:"key"`
+	Name         string   `json:"name"`
+	Qualifier    string   `json:"qualifier"`
+	AnalysisDate string   `json:"analysisDate"`
+	Tags         []string `json:"tags"`
+	Visibility   string   `json:"visibility"`
+}
+
+type ComponentResp struct {
+	Component Component `json:"component"`
+	Ancestors []string  `json:"ancestors"`
 }
 
 var wg sync.WaitGroup
@@ -31,41 +58,46 @@ var wg sync.WaitGroup
 //type Projects []Project
 
 func deleteKey(key string) {
-    
-    defer wg.Done()
-    
-	var dat = url.Values{"key": {key}}
+
+	defer wg.Done()
+
+	var dat = url.Values{"project": {key}}
 	p := fmt.Println
-    p("Deleteing: " + key)
+	p("Deleteing: " + key)
 	client := http.Client{}
-	r, err := client.PostForm("https://****:*****@sonarqube-host.domain/api/projects/delete", dat)
+	r, err := client.PostForm("https://user:pass@sonar.example.com/api/projects/delete", dat)
 	if err != nil {
 		log.Fatal(err)
 	}
-	//rr, _ := ioutil.ReadAll(r.Body)
-	//p(string(rr))
-    defer r.Body.Close()
-		
+	rr, _ := ioutil.ReadAll(r.Body)
+	p(string(rr))
+	defer r.Body.Close()
+
 	p("Deleted: " + key)
 	p(r.StatusCode)
 }
 
 func main() {
 	maxProcs := runtime.NumCPU()
+	p := fmt.Println
 	runtime.GOMAXPROCS(maxProcs)
-	var data []Project
+	var data Response
 	// var timeout = time.Duration(60 * time.Second)
 	client := http.Client{
 	//Timeout: timeout,
 	}
 
-	resp, err := client.Get("https://****:*****@sonarqube-host.domain/api/projects?versions=true")
+	resp, err := client.Get("https://user:pass@sonar.example.com/api/components/search?qualifiers=TRK&pageSize=1000")
+
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer resp.Body.Close()
-	decoder := json.NewDecoder(resp.Body)
 
+	//rr, _ := ioutil.ReadAll(resp.Body)
+	//p(string(rr))
+
+	decoder := json.NewDecoder(resp.Body)
 	err = decoder.Decode(&data)
 	if err != nil {
 		fmt.Printf("%T\n%s\n%#v\n", err, err, err)
@@ -74,28 +106,36 @@ func main() {
 			fmt.Println("JSON error %s", v)
 		}
 	}
-	p := fmt.Println
-	//fmt.Printf("Results: %v\n", data)
 
-	for _, track := range data {
-		for a, b := range track.Version {
+	for _, component := range data.Components {
+		resp, err = client.Get("https://user:pass@sonar.example.com/api/components/show?component=" + component.Key)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer resp.Body.Close()
 
-			t1, _ := time.Parse("2006-01-02T15:04:05+0000", string(b.Date))
-
-			if t1.Before(time.Now().AddDate(0, -1, 0)) {
-				//if time.Now().Sub(t1).Hours>time.Duration.Hours{
-				//if t1. < time.Now().AddDate(0,-1,0){
-				if !strings.Contains(track.Key, ":master") {
-					if !strings.Contains(track.Key, ":cake2") {
-						fmt.Printf("Project:%s Version:%s Date: %s Key: %s\n", string(track.Id), string(a), string(b.Date), string(track.Key))
-						p(t1)
-						p("To delete\n")
-						wg.Add(1)
-						deleteKey(track.Key)
-					}
-				}
+		var comp ComponentResp
+		decoder := json.NewDecoder(resp.Body)
+		err = decoder.Decode(&comp)
+		if err != nil {
+			fmt.Printf("%T\n%s\n%#v\n", err, err, err)
+			switch v := err.(type) {
+			case *json.SyntaxError:
+				fmt.Println("JSON error %s", v)
 			}
 		}
+
+		t1, _ := time.Parse("2006-01-02T15:04:05+0000", string(comp.Component.AnalysisDate))
+		if t1.Before(time.Now().AddDate(0, -3, 0)) {
+			if !strings.Contains(comp.Component.Key, ":master") && !strings.Contains(comp.Component.Key, ":cake2") && !strings.Contains(comp.Component.Key, ":production") && !strings.Contains(comp.Component.Key, ":live") {
+				fmt.Printf("Project:%s Anylysis Date: %s Key: %s\n", string(comp.Component.Id), string(comp.Component.AnalysisDate), string(comp.Component.Key))
+				p(t1)
+				p("To delete\n")
+				wg.Add(1)
+				go deleteKey(comp.Component.Key)
+			}
+		}
+
 	}
 
 	p("Waiting for all goroutines...")
